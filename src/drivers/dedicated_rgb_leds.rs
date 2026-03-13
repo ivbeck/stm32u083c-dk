@@ -24,16 +24,18 @@ impl Rgb {
     }
 
     pub async fn blink_cascade(&mut self, delay_ms: u64) {
-        self.red.set_high();
-        Timer::after_millis(delay_ms).await;
-        self.red.set_low();
-
         self.green.set_high();
         Timer::after_millis(delay_ms).await;
-        self.green.set_low();
-
         self.blue.set_high();
         Timer::after_millis(delay_ms).await;
+        self.red.set_high();
+
+        Timer::after_millis(delay_ms).await;
+        self.green.set_low();
+        Timer::after_millis(delay_ms).await;
         self.blue.set_low();
+        Timer::after_millis(delay_ms).await;
+        self.red.set_low();
+        Timer::after_millis(delay_ms).await;
     }
 }

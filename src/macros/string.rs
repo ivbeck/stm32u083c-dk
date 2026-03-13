@@ -1,3 +1,5 @@
+#![allow(unused)]
+
 use core::fmt::{self, Write};
 
 pub struct StackString<const N: usize> {
@@ -14,7 +16,10 @@ impl<const N: usize> Default for StackString<N> {
 impl<const N: usize> StackString<N> {
     #[must_use]
     pub const fn new() -> Self {
-        Self { buf: [0; N], len: 0 }
+        Self {
+            buf: [0; N],
+            len: 0,
+        }
     }
 
     #[must_use]
