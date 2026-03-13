@@ -14,6 +14,8 @@ mod macros;
 use embassy_executor::Spawner;
 use embassy_stm32::adc::AdcChannel;
 use embassy_stm32::rcc::LsConfig;
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
 use embassy_time::Timer;
 
 #[embassy_executor::main]
