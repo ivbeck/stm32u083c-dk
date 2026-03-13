@@ -1,0 +1,9 @@
+{
+  "rust-analyzer.checkOnSave.command": "clippy",
+  "rust-analyzer.checkOnSave.extraArgs": [
+    "--target",
+    "thumbv7em-none-eabi"
+  ],
+  "rust-analyzer.runnables.command": "cargo",
+  "rust-analyzer.cargo.target": "thumbv7em-none-eabi"
+}

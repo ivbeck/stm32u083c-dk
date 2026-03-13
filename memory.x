@@ -1,0 +1,8 @@
+MEMORY
+{
+  /* STM32U083C: 256 KB Flash starting at 0x08000000 */
+  FLASH : ORIGIN = 0x08000000, LENGTH = 256K
+  
+  /* STM32U083C: 40 KB RAM starting at 0x20000000 */
+  RAM   : ORIGIN = 0x20000000, LENGTH = 40K
+}
