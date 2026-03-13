@@ -1,227 +1,299 @@
 use embassy_stm32::{
+    Peri,
     lcd::{self, Bias, Config, Duty, LcdPin},
     peripherals::{
-        LCD, PA8, PA9, PA10, PB1, PB9, PB11, PB14, PB15, PC3, PC4, PC5, PC6, PC8, PC9, PC10, PC11,
-        PD0, PD1, PD3, PD4, PD5, PD6, PD8, PD9, PD12, PD13, PE7, PE8, PE9,
+        self, LCD, PA8, PA9, PA10, PB1, PB9, PB11, PB14, PB15, PC3, PC4, PC5, PC6, PC8, PC9,
+        PC10, PC11, PD0, PD1, PD3, PD4, PD5, PD6, PD8, PD9, PD12, PD13, PE7, PE8, PE9,
     },
-    Peri,
 };
 
-// Standard 7-segment encoding.
-// Bit positions: 0=a(top) 1=b(upper-right) 2=c(lower-right) 3=d(bottom)
-//                4=e(lower-left) 5=f(upper-left) 6=g(middle)
-//
-//   _
-//  |_|
-//  |_|
-const SEVEN_SEG: [u8; 11] = [
-    0b0111111, // 0: abcdef
-    0b0000110, // 1: bc
-    0b1011011, // 2: abdeg
-    0b1001111, // 3: abcdg
-    0b1100110, // 4: bcfg
-    0b1101101, // 5: acdfg
-    0b1111101, // 6: acdefg
-    0b0000111, // 7: abc
-    0b1111111, // 8: abcdefg
-    0b1101111, // 9: abcdfg
-    0b0000000, // 10: blank
+// Glass SEG index (0..23 on DIP28 connector) -> hardware MCU LCD_SEGx bit position
+// in the 64-bit value passed to `write_com_segments`.
+// Source: UM3292 Table 12 (RevB/RevC board).
+const GLASS_TO_HW_SEG: [u8; 24] = [
+    22, // Glass SEG0  -> LCD_SEG22 (PC4)
+    23, // Glass SEG1  -> LCD_SEG23 (PC5)
+    6,  // Glass SEG2  -> LCD_SEG6  (PB1)
+    45, // Glass SEG3  -> LCD_SEG45 (PE7)
+    46, // Glass SEG4  -> LCD_SEG46 (PE8)
+    47, // Glass SEG5  -> LCD_SEG47 (PE9)
+    11, // Glass SEG6  -> LCD_SEG11 (PB11)
+    14, // Glass SEG7  -> LCD_SEG14 (PB14)
+    15, // Glass SEG8  -> LCD_SEG15 (PB15)
+    28, // Glass SEG9  -> LCD_SEG28 (PD8)
+    29, // Glass SEG10 -> LCD_SEG29 (PD9)
+    32, // Glass SEG11 -> LCD_SEG32 (PD12)
+    33, // Glass SEG12 -> LCD_SEG33 (PD13)
+    24, // Glass SEG13 -> LCD_SEG24 (PC6)
+    26, // Glass SEG14 -> LCD_SEG26 (PC8)
+    27, // Glass SEG15 -> LCD_SEG27 (PC9)
+    48, // Glass SEG16 -> LCD_SEG48 (PC10)
+    34, // Glass SEG17 -> LCD_SEG34 (PD0)
+    35, // Glass SEG18 -> LCD_SEG35 (PD1)
+    36, // Glass SEG19 -> LCD_SEG36 (PD3)
+    37, // Glass SEG20 -> LCD_SEG37 (PD4)
+    38, // Glass SEG21 -> LCD_SEG38 (PD5)
+    39, // Glass SEG22 -> LCD_SEG39 (PD6)
+    49, // Glass SEG23 -> LCD_SEG49 (PC11)
 ];
 
-/// Mapping from logical digit & segment (a-g) to `(com_index, seg_index)` on the LCD controller.
-///
-/// - First index: digit position 0..=3 (left to right)
-/// - Second index: segment 0..=6 (a..g as in `SEVEN_SEG`)
-/// - Value: `(com, seg)` such that we light `COM[com]` + `SEG[seg]`.
-///
-/// IMPORTANT: The values below are **placeholders**. They must be updated to match
-/// the actual glass mapping you discover with `test_segments` (see `main.rs`).
-const DIGIT_SEG_MAP: [[(u8, u8); 7]; 4] = [
-    // Digit 0
-    [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (0, 2), (1, 2)],
-    // Digit 1
-    [(0, 3), (0, 4), (1, 3), (1, 4), (2, 1), (0, 5), (1, 5)],
-    // Digit 2
-    [(0, 6), (0, 7), (1, 6), (1, 7), (2, 2), (0, 8), (1, 8)],
-    // Digit 3
-    [(0, 9), (0, 10), (1, 9), (1, 10), (2, 3), (0, 11), (1, 11)],
+// Per-digit glass SEG indices (4 per digit).
+// Within each COM, the 4-bit nibble from the character encoding maps:
+//   bit 0 -> glass_segs[0], bit 1 -> glass_segs[1],
+//   bit 2 -> glass_segs[2], bit 3 -> glass_segs[3].
+// Source: STM32CubeU0 BSP WriteChar (RevB/RevC).
+const DIGIT_GLASS_SEGS: [[u8; 4]; 6] = [
+    [0, 1, 22, 23],   // Digit 1 (leftmost)
+    [2, 3, 20, 21],   // Digit 2
+    [4, 5, 18, 19],   // Digit 3
+    [6, 7, 16, 17],   // Digit 4
+    [8, 9, 14, 15],   // Digit 5
+    [10, 11, 12, 13], // Digit 6 (rightmost)
 ];
 
-// Physical segment mapping: DIGIT_MAP[digit_position][segment_a_through_g] = (com_index, seg_bit)
+// 14-segment character encoding from STM32CubeU0 BSP.
+// Packed as 16 bits: [COM0:4][COM1:4][COM2:4][COM3:4].
 //
-// ══════════════════════════════════════════════════════════════════════════
-// CALIBRATION REQUIRED — values below are PLACEHOLDER guesses based on the
-// typical STM32 glass LCD pinout (2 SEG lines per digit, 4 COMs).
+// Glass 14-segment layout:
+//     -----A-----
+//     |\   |   /|
+//     F H  J  K B
+//     |  \ | /  |
+//     --G-- --M--
+//     |  / | \  |
+//     E Q  P  N C
+//     |/   |   \|
+//     -----D-----
 //
-// How to calibrate:
-//   1. Call lcd.write_com_segments(com, 1u64 << seg_n) for each COM (0-3)
-//      and each segment number from the board's pin table.
-//   2. Note which physical pixel lights up on the glass.
-//   3. Fill in this table to map each visual segment (a-g) of each digit
-//      to the correct (com, 1u64 << seg_n) pair.
-//
-// Assumed glass layout (2 SEG lines per digit, pins from DIP28 connector):
-//   Digit 0: HW SEG22 (glass left), HW SEG23 (glass right)
-//   Digit 1: HW SEG6  (glass left), HW SEG45 (glass right)
-//   Digit 2: HW SEG46 (glass left), HW SEG47 (glass right)
-//   Digit 3: HW SEG11 (glass left), HW SEG14 (glass right)
-//
-// Assumed COM-to-segment mapping per digit (common STM32 glass convention):
-//   COM0 + left  → f (upper-left)   COM0 + right → a (top)
-//   COM1 + left  → g (middle)       COM1 + right → b (upper-right)
-//   COM2 + left  → e (lower-left)   COM2 + right → c (lower-right)
-//   COM3 + left  → d (bottom)       COM3 + right → dp (decimal point)
-// ══════════════════════════════════════════════════════════════════════════
-//
-//                   a             b             c             d
-//                   e             f             g
+// COM0 nibble bits: 0=E, 1=M, 2=B, 3=G
+// COM1 nibble bits: 0=D, 1=C, 2=A, 3=F
+// COM2 nibble bits: 0=P, 1=COL, 2=K, 3=Q
+// COM3 nibble bits: 0=N, 1=DP,  2=J, 3=H
+const NUMBER_MAP: [u16; 11] = [
+    0x5F00, // 0
+    0x4200, // 1
+    0xF500, // 2
+    0x6700, // 3
+    0xEA00, // 4
+    0xAF00, // 5
+    0xBF00, // 6
+    0x4600, // 7
+    0xFF00, // 8
+    0xEF00, // 9
+    0x0000, // blank
+];
+
+/// Pin set for the STM32U083C-DK on-board 4x24 segment LCD (DIP28 connector).
+/// Pin order follows UM3292 Table 12.
+pub struct SegLcdPins {
+    pub lcd: Peri<'static, LCD>,
+    pub vlcd: Peri<'static, PC3>,
+    pub com0: Peri<'static, PA8>,
+    pub com1: Peri<'static, PA9>,
+    pub com2: Peri<'static, PA10>,
+    pub com3: Peri<'static, PB9>,
+    pub seg0: Peri<'static, PC4>,
+    pub seg1: Peri<'static, PC5>,
+    pub seg2: Peri<'static, PB1>,
+    pub seg3: Peri<'static, PE7>,
+    pub seg4: Peri<'static, PE8>,
+    pub seg5: Peri<'static, PE9>,
+    pub seg6: Peri<'static, PB11>,
+    pub seg7: Peri<'static, PB14>,
+    pub seg8: Peri<'static, PB15>,
+    pub seg9: Peri<'static, PD8>,
+    pub seg10: Peri<'static, PD9>,
+    pub seg11: Peri<'static, PD12>,
+    pub seg12: Peri<'static, PD13>,
+    pub seg13: Peri<'static, PC6>,
+    pub seg14: Peri<'static, PC8>,
+    pub seg15: Peri<'static, PC9>,
+    pub seg16: Peri<'static, PC10>,
+    pub seg17: Peri<'static, PD0>,
+    pub seg18: Peri<'static, PD1>,
+    pub seg19: Peri<'static, PD3>,
+    pub seg20: Peri<'static, PD4>,
+    pub seg21: Peri<'static, PD5>,
+    pub seg22: Peri<'static, PD6>,
+    pub seg23: Peri<'static, PC11>,
+}
+
+impl SegLcd {
+    /// Convenience constructor for the STM32U083C-DK board.
+    ///
+    /// Steals the LCD-related peripheral singletons. After calling this, the
+    /// corresponding fields on `Peripherals` (`LCD`, `PC3`, `PA8`, `PA9`,
+    /// `PA10`, `PB1`, `PB9`, `PB11`, `PB14`, `PB15`, `PC4`..`PC11`,
+    /// `PD0`, `PD1`, `PD3`..`PD6`, `PD8`, `PD9`, `PD12`, `PD13`,
+    /// `PE7`..`PE9`) **must not be used again**.
+    ///
+    /// # Safety
+    ///
+    /// The caller must ensure these peripherals are not used elsewhere.
+    /// In practice, call this once early in `main` before handing out any
+    /// of the LCD-related pins.
+    pub unsafe fn from_peripherals() -> Self {
+        unsafe {
+            Self::new(SegLcdPins {
+                lcd: peripherals::LCD::steal(),
+                vlcd: peripherals::PC3::steal(),
+                com0: peripherals::PA8::steal(),
+                com1: peripherals::PA9::steal(),
+                com2: peripherals::PA10::steal(),
+                com3: peripherals::PB9::steal(),
+                seg0: peripherals::PC4::steal(),
+                seg1: peripherals::PC5::steal(),
+                seg2: peripherals::PB1::steal(),
+                seg3: peripherals::PE7::steal(),
+                seg4: peripherals::PE8::steal(),
+                seg5: peripherals::PE9::steal(),
+                seg6: peripherals::PB11::steal(),
+                seg7: peripherals::PB14::steal(),
+                seg8: peripherals::PB15::steal(),
+                seg9: peripherals::PD8::steal(),
+                seg10: peripherals::PD9::steal(),
+                seg11: peripherals::PD12::steal(),
+                seg12: peripherals::PD13::steal(),
+                seg13: peripherals::PC6::steal(),
+                seg14: peripherals::PC8::steal(),
+                seg15: peripherals::PC9::steal(),
+                seg16: peripherals::PC10::steal(),
+                seg17: peripherals::PD0::steal(),
+                seg18: peripherals::PD1::steal(),
+                seg19: peripherals::PD3::steal(),
+                seg20: peripherals::PD4::steal(),
+                seg21: peripherals::PD5::steal(),
+                seg22: peripherals::PD6::steal(),
+                seg23: peripherals::PC11::steal(),
+            })
+        }
+    }
+}
+
 pub struct SegLcd {
     lcd: lcd::Lcd<'static, LCD>,
 }
 
 impl SegLcd {
-    pub fn new(
-        lcd_peripheral: Peri<'static, LCD>,
-        vlcd_pin: Peri<'static, PC3>,
-        com0: Peri<'static, PA8>,
-        com1: Peri<'static, PA9>,
-        com2: Peri<'static, PA10>,
-        com3: Peri<'static, PB9>,
-        seg0: Peri<'static, PC4>,
-        seg1: Peri<'static, PC5>,
-        seg2: Peri<'static, PB1>,
-        seg3: Peri<'static, PE7>,
-        seg4: Peri<'static, PE8>,
-        seg5: Peri<'static, PE9>,
-        seg6: Peri<'static, PB11>,
-        seg7: Peri<'static, PB14>,
-        seg8: Peri<'static, PB15>,
-        seg9: Peri<'static, PD8>,
-        seg10: Peri<'static, PD9>,
-        seg11: Peri<'static, PD12>,
-        seg12: Peri<'static, PD13>,
-        seg13: Peri<'static, PC6>,
-        seg14: Peri<'static, PC8>,
-        seg15: Peri<'static, PC9>,
-        seg16: Peri<'static, PC10>,
-        seg17: Peri<'static, PD0>,
-        seg18: Peri<'static, PD1>,
-        seg19: Peri<'static, PD3>,
-        seg20: Peri<'static, PD4>,
-        seg21: Peri<'static, PD5>,
-        seg22: Peri<'static, PD6>,
-        seg23: Peri<'static, PC11>,
-    ) -> Self {
+    pub fn new(pins: SegLcdPins) -> Self {
         let mut config = Config::default();
         config.duty = Duty::Quarter;
         config.bias = Bias::Third;
 
         let lcd = lcd::Lcd::new(
-            lcd_peripheral,
+            pins.lcd,
             config,
-            vlcd_pin,
+            pins.vlcd,
             [
-                LcdPin::new_com(com0),
-                LcdPin::new_com(com1),
-                LcdPin::new_com(com2),
-                LcdPin::new_com(com3),
-                LcdPin::new_seg(seg0),
-                LcdPin::new_seg(seg1),
-                LcdPin::new_seg(seg2),
-                LcdPin::new_seg(seg3),
-                LcdPin::new_seg(seg4),
-                LcdPin::new_seg(seg5),
-                LcdPin::new_seg(seg6),
-                LcdPin::new_seg(seg7),
-                LcdPin::new_seg(seg8),
-                LcdPin::new_seg(seg9),
-                LcdPin::new_seg(seg10),
-                LcdPin::new_seg(seg11),
-                LcdPin::new_seg(seg12),
-                LcdPin::new_seg(seg13),
-                LcdPin::new_seg(seg14),
-                LcdPin::new_seg(seg15),
-                LcdPin::new_seg(seg16),
-                LcdPin::new_seg(seg17),
-                LcdPin::new_seg(seg18),
-                LcdPin::new_seg(seg19),
-                LcdPin::new_seg(seg20),
-                LcdPin::new_seg(seg21),
-                LcdPin::new_seg(seg22),
-                LcdPin::new_seg(seg23),
+                LcdPin::new_com(pins.com0),
+                LcdPin::new_com(pins.com1),
+                LcdPin::new_com(pins.com2),
+                LcdPin::new_com(pins.com3),
+                LcdPin::new_seg(pins.seg0),
+                LcdPin::new_seg(pins.seg1),
+                LcdPin::new_seg(pins.seg2),
+                LcdPin::new_seg(pins.seg3),
+                LcdPin::new_seg(pins.seg4),
+                LcdPin::new_seg(pins.seg5),
+                LcdPin::new_seg(pins.seg6),
+                LcdPin::new_seg(pins.seg7),
+                LcdPin::new_seg(pins.seg8),
+                LcdPin::new_seg(pins.seg9),
+                LcdPin::new_seg(pins.seg10),
+                LcdPin::new_seg(pins.seg11),
+                LcdPin::new_seg(pins.seg12),
+                LcdPin::new_seg(pins.seg13),
+                LcdPin::new_seg(pins.seg14),
+                LcdPin::new_seg(pins.seg15),
+                LcdPin::new_seg(pins.seg16),
+                LcdPin::new_seg(pins.seg17),
+                LcdPin::new_seg(pins.seg18),
+                LcdPin::new_seg(pins.seg19),
+                LcdPin::new_seg(pins.seg20),
+                LcdPin::new_seg(pins.seg21),
+                LcdPin::new_seg(pins.seg22),
+                LcdPin::new_seg(pins.seg23),
             ],
         );
 
         Self { lcd }
     }
 
-    /// Display a decimal value right-justified across 4 digits (leading blanks).
-    /// Values above 9999 are clamped.
-    pub fn display_ms(&mut self, ms: u32) {
-        let ms = ms.min(9999);
+    /// Display a decimal number right-justified across all 6 digit positions.
+    /// Values above 999999 are clamped. Leading positions are blank.
+    pub fn display_number(&mut self, value: u32) {
+        let value = value.min(999999);
 
-        let digits = [
-            if ms >= 1000 {
-                (ms / 1000 % 10) as usize
+        let digits: [usize; 6] = [
+            if value >= 100000 {
+                (value / 100000 % 10) as usize
             } else {
                 10
             },
-            if ms >= 100 {
-                (ms / 100 % 10) as usize
+            if value >= 10000 {
+                (value / 10000 % 10) as usize
             } else {
                 10
             },
-            if ms >= 10 {
-                (ms / 10 % 10) as usize
+            if value >= 1000 {
+                (value / 1000 % 10) as usize
             } else {
                 10
             },
-            (ms % 10) as usize,
+            if value >= 100 {
+                (value / 100 % 10) as usize
+            } else {
+                10
+            },
+            if value >= 10 {
+                (value / 10 % 10) as usize
+            } else {
+                10
+            },
+            (value % 10) as usize,
         ];
 
-        // Accumulate a 64-bit segment bitmap per COM line.
         let mut com_segs = [0u64; 4];
 
-        for (digit_idx, &digit) in digits.iter().enumerate() {
-            if digit == 10 {
-                // Blank
-                continue;
-            }
+        for (digit_idx, &digit_val) in digits.iter().enumerate() {
+            let encoding = NUMBER_MAP[digit_val];
+            let glass_segs = &DIGIT_GLASS_SEGS[digit_idx];
 
-            let pattern = SEVEN_SEG[digit];
-
-            for seg_idx in 0..7 {
-                if (pattern & (1 << seg_idx)) == 0 {
-                    continue;
+            for com in 0..4u8 {
+                let nibble = (encoding >> (12 - com as u16 * 4)) & 0xf;
+                for bit in 0..4u8 {
+                    if (nibble & (1 << bit)) != 0 {
+                        let glass_idx = glass_segs[bit as usize];
+                        let hw_seg = GLASS_TO_HW_SEG[glass_idx as usize];
+                        com_segs[com as usize] |= 1u64 << hw_seg;
+                    }
                 }
-
-                let (com, seg) = DIGIT_SEG_MAP[digit_idx][seg_idx];
-
-                if com >= 4 {
-                    continue;
-                }
-                if seg as u32 >= 64 {
-                    continue;
-                }
-
-                com_segs[com as usize] |= 1u64 << seg;
             }
         }
 
-        // Push frame to hardware.
         for (com, &mask) in com_segs.iter().enumerate() {
             self.lcd.write_com_segments(com as u8, mask);
         }
         self.lcd.submit_frame();
     }
 
-    pub fn test_single_segment(&mut self, com: u8, seg_bit: u64) {
-        // Clear all segments.
+    /// Clear the entire LCD.
+    pub fn clear(&mut self) {
         for c in 0..4u8 {
             self.lcd.write_com_segments(c, 0);
         }
-        // Light exactly one COM/SEG combination.
-        self.lcd.write_com_segments(com, seg_bit);
+        self.lcd.submit_frame();
+    }
+
+    /// Light a single glass segment for hardware bring-up / calibration.
+    /// `glass_seg` is 0..23 (DIP28 connector pin order from UM3292 Table 12).
+    /// `com` is 0..3.
+    pub fn test_single_segment(&mut self, com: u8, glass_seg: u8) {
+        let hw_seg = GLASS_TO_HW_SEG[glass_seg as usize];
+        for c in 0..4u8 {
+            self.lcd.write_com_segments(c, 0);
+        }
+        self.lcd.write_com_segments(com, 1u64 << hw_seg);
         self.lcd.submit_frame();
     }
 }

@@ -1,6 +1,3 @@
-use core::fmt::Display;
-
-use defmt::{dbg, debug};
 use embassy_stm32::{
     Peri,
     adc::{Adc, AdcChannel, SampleTime},

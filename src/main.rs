@@ -19,8 +19,7 @@ use drivers::dedicated_rgb_leds::Rgb;
 use drivers::joystick::{JoyDirection, Joystick};
 use drivers::lcd::SegLcd;
 
-const DELAY_MIN_MS: u32 = 10;
-const DELAY_MAX_MS: u32 = 500;
+const DELAY_MAX_MS: u32 = 5000;
 const DELAY_STEP_MS: u32 = 50;
 
 static DELAY_MS: AtomicU32 = AtomicU32::new(100);
@@ -28,7 +27,7 @@ static SHOW_NEXT: AtomicBool = AtomicBool::new(false);
 static SHOW_PREV: AtomicBool = AtomicBool::new(false);
 
 #[embassy_executor::task]
-async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>) {
+async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>, mut seg_lcd: SegLcd) {
     let mut prev: Option<JoyDirection> = None;
     loop {
         let dir = joystick.read();
@@ -38,11 +37,9 @@ async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>) {
             match dir {
                 JoyDirection::Up => {
                     let v = DELAY_MS.load(Ordering::Relaxed);
-                    DELAY_MS.store(
-                        v.saturating_sub(DELAY_STEP_MS).max(DELAY_MIN_MS),
-                        Ordering::Relaxed,
-                    );
+                    DELAY_MS.store(v.saturating_sub(DELAY_STEP_MS), Ordering::Relaxed);
                     info!("Speed up: {}ms", DELAY_MS.load(Ordering::Relaxed));
+                    seg_lcd.display_number(DELAY_MS.load(Ordering::Relaxed));
                 }
                 JoyDirection::Down => {
                     let v = DELAY_MS.load(Ordering::Relaxed);
@@ -51,6 +48,7 @@ async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>) {
                         Ordering::Relaxed,
                     );
                     info!("Speed down: {}ms", DELAY_MS.load(Ordering::Relaxed));
+                    seg_lcd.display_number(DELAY_MS.load(Ordering::Relaxed));
                 }
                 JoyDirection::Right => {
                     SHOW_NEXT.store(true, Ordering::Relaxed);
@@ -76,44 +74,14 @@ async fn main(spawner: Spawner) {
 
     let rgb = Rgb::new(p.PB2, p.PC13, p.PA5);
 
-    let seg_lcd = SegLcd::new(
-        p.LCD,
-        p.PC3,
-        p.PA8,
-        p.PA9,
-        p.PA10,
-        p.PB9,
-        p.PC4,
-        p.PC5,
-        p.PB1,
-        p.PE7,
-        p.PE8,
-        p.PE9,
-        p.PB11,
-        p.PB14,
-        p.PB15,
-        p.PD8,
-        p.PD9,
-        p.PD12,
-        p.PD13,
-        p.PC6,
-        p.PC8,
-        p.PC9,
-        p.PC10,
-        p.PD0,
-        p.PD1,
-        p.PD3,
-        p.PD4,
-        p.PD5,
-        p.PD6,
-        p.PC11,
-    );
+    // SAFETY: called once before any LCD pins are used elsewhere.
+    let seg_lcd = unsafe { SegLcd::from_peripherals() };
 
     // degrade_adc() erases pin type so Joystick can be passed to a task
     let joystick = Joystick::new(p.ADC1, p.PC2.degrade_adc());
-    spawner.spawn(joystick_task(joystick)).unwrap();
+    spawner.spawn(joystick_task(joystick, seg_lcd)).unwrap();
 
-    spawner.spawn(test_segments(seg_lcd)).unwrap();
+    // spawner.spawn(test_segments(seg_lcd)).unwrap();
     spawner.spawn(blink_task(rgb)).unwrap();
 
     loop {
@@ -123,51 +91,42 @@ async fn main(spawner: Spawner) {
 
 #[embassy_executor::task]
 async fn test_segments(mut seg_lcd: SegLcd) {
-    info!("Testing segments...");
+    info!("Testing LCD: displaying 123456...");
+    seg_lcd.display_number(123456);
+    Timer::after_millis(3000).await;
 
-    // STM32U083C-DK LCD has 24 SEG lines (SEG0..SEG23).
-    const MAX_SEG: usize = 24;
+    info!("Entering single-segment scan mode (joystick left/right to navigate)");
+    const MAX_GLASS_SEG: u8 = 24;
 
-    let mut next_seg = 0;
-    let mut com = 0;
+    let mut glass_seg: u8 = 0;
+    let mut com: u8 = 0;
 
     loop {
         if SHOW_NEXT.load(Ordering::Relaxed) {
-            if next_seg < MAX_SEG - 1 {
-                next_seg += 1;
+            if glass_seg < MAX_GLASS_SEG - 1 {
+                glass_seg += 1;
             } else {
-                next_seg = 0;
-                com += 1;
-                if com >= 4 {
-                    com = 0;
-                }
+                glass_seg = 0;
+                com = (com + 1) % 4;
             }
-
-            info!("Showing next segment: {} (com: {})", next_seg, com);
+            info!("Glass SEG {} on COM{}", glass_seg, com);
         }
         if SHOW_PREV.load(Ordering::Relaxed) {
-            if next_seg > 0 {
-                next_seg -= 1;
+            if glass_seg > 0 {
+                glass_seg -= 1;
             } else {
-                next_seg = MAX_SEG - 1;
-                if com > 0 {
-                    com -= 1;
-                } else {
-                    com = 3;
-                }
+                glass_seg = MAX_GLASS_SEG - 1;
+                com = if com > 0 { com - 1 } else { 3 };
             }
-            info!("Showing previous segment: {} (com: {})", next_seg, com);
+            info!("Glass SEG {} on COM{}", glass_seg, com);
         }
 
-        seg_lcd.test_single_segment(com, 1u64 << next_seg);
+        seg_lcd.test_single_segment(com, glass_seg);
 
         SHOW_NEXT.store(false, Ordering::Relaxed);
         SHOW_PREV.store(false, Ordering::Relaxed);
         Timer::after_millis(100).await;
     }
-
-    info!("Done testing segments");
-    crate::panic!("Done");
 }
 
 #[embassy_executor::task]
