@@ -24,6 +24,8 @@ embassy-stm32 = { version = "0.5.0", features = [
 fchashmap = "0.1.3"
 hash32 = "1.0.0"
 hash32-derive = "0.1.1"
+embassy-sync = { version = "0.7.2", features = ["defmt"] }
+embassy-futures = { version = "0.1.2", features = ["defmt"] }
 
 [package.metadata.embassy]
 build = [{ target = "thumbv7em-none-eabi" }]

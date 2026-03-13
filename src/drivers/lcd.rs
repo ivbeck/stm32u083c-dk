@@ -1,11 +1,79 @@
+use embassy_futures::select::{Either, select};
 use embassy_stm32::{
     Peri,
     lcd::{self, Bias, Config, Duty, LcdPin},
     peripherals::{
-        self, LCD, PA8, PA9, PA10, PB1, PB9, PB11, PB14, PB15, PC3, PC4, PC5, PC6, PC8, PC9,
-        PC10, PC11, PD0, PD1, PD3, PD4, PD5, PD6, PD8, PD9, PD12, PD13, PE7, PE8, PE9,
+        self, LCD, PA8, PA9, PA10, PB1, PB9, PB11, PB14, PB15, PC3, PC4, PC5, PC6, PC8, PC9, PC10,
+        PC11, PD0, PD1, PD3, PD4, PD5, PD6, PD8, PD9, PD12, PD13, PE7, PE8, PE9,
     },
 };
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
+use embassy_sync::signal::Signal;
+use embassy_time::Timer;
+
+pub type LcdSignal = Signal<CriticalSectionRawMutex, LcdCommand>;
+
+const LCD_TEXT_MAX: usize = 32;
+
+#[allow(unused)]
+#[derive(Clone)]
+pub enum LcdCommand {
+    Number(u32),
+    Text {
+        buf: [u8; 6],
+        len: u8,
+    },
+    Scroll {
+        buf: [u8; LCD_TEXT_MAX],
+        len: u8,
+        speed_ms: u16,
+    },
+    ScrollLoop {
+        buf: [u8; LCD_TEXT_MAX],
+        len: u8,
+        speed_ms: u16,
+    },
+    Clear,
+}
+
+impl LcdCommand {
+    pub fn number(n: u32) -> Self {
+        Self::Number(n)
+    }
+
+    #[allow(unused)]
+    pub fn text(s: &str) -> Self {
+        let mut buf = [b' '; 6];
+        let len = s.len().min(6);
+        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
+        Self::Text {
+            buf,
+            len: len as u8,
+        }
+    }
+
+    pub fn scroll(s: &str, speed_ms: u16) -> Self {
+        let mut buf = [b' '; LCD_TEXT_MAX];
+        let len = s.len().min(LCD_TEXT_MAX);
+        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
+        Self::Scroll {
+            buf,
+            len: len as u8,
+            speed_ms,
+        }
+    }
+
+    pub fn scroll_loop(s: &str, speed_ms: u16) -> Self {
+        let mut buf = [b' '; LCD_TEXT_MAX];
+        let len = s.len().min(LCD_TEXT_MAX);
+        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
+        Self::ScrollLoop {
+            buf,
+            len: len as u8,
+            speed_ms,
+        }
+    }
+}
 
 // Glass SEG index (0..23 on DIP28 connector) -> hardware MCU LCD_SEGx bit position
 // in the 64-bit value passed to `write_com_segments`.
@@ -332,6 +400,7 @@ impl SegLcd {
     /// Light a single glass segment for hardware bring-up / calibration.
     /// `glass_seg` is 0..23 (DIP28 connector pin order from UM3292 Table 12).
     /// `com` is 0..3.
+    #[allow(unused)]
     pub fn test_single_segment(&mut self, com: u8, glass_seg: u8) {
         let hw_seg = GLASS_TO_HW_SEG[glass_seg as usize];
         for c in 0..4u8 {
@@ -339,5 +408,98 @@ impl SegLcd {
         }
         self.lcd.write_com_segments(com, 1u64 << hw_seg);
         self.lcd.submit_frame();
+    }
+
+    /// Process LCD commands from a `Signal`, forever.
+    ///
+    /// Immediate commands (`Number`, `Text`, `Clear`) are applied instantly.
+    /// Animated commands (`Scroll`, `ScrollLoop`) run frame-by-frame and are
+    /// **automatically cancelled** when a new command arrives on the signal.
+    ///
+    /// Spawn this in a dedicated `#[embassy_executor::task]`.
+    pub async fn run(&mut self, signal: &'static LcdSignal) -> ! {
+        let mut pending: Option<LcdCommand> = None;
+
+        loop {
+            let cmd = match pending.take() {
+                Some(cmd) => cmd,
+                None => signal.wait().await,
+            };
+
+            match cmd {
+                LcdCommand::Number(n) => self.display_number(n),
+                LcdCommand::Text { buf, len } => {
+                    let s = core::str::from_utf8(&buf[..len as usize]).unwrap_or("");
+                    self.display_str(s);
+                }
+                LcdCommand::Clear => self.clear(),
+                LcdCommand::Scroll { buf, len, speed_ms } => {
+                    pending = self
+                        .run_scroll(signal, &buf[..len as usize], speed_ms as u64, false)
+                        .await;
+                }
+                LcdCommand::ScrollLoop { buf, len, speed_ms } => {
+                    pending = self
+                        .run_scroll(signal, &buf[..len as usize], speed_ms as u64, true)
+                        .await;
+                }
+            }
+        }
+    }
+
+    /// Run a scroll animation, returning `Some(cmd)` if cancelled by a new
+    /// command, or `None` when a one-shot scroll finishes naturally.
+    async fn run_scroll(
+        &mut self,
+        signal: &LcdSignal,
+        text: &[u8],
+        speed_ms: u64,
+        looping: bool,
+    ) -> Option<LcdCommand> {
+        const PAD: usize = 6;
+        const GAP: usize = 3;
+
+        if looping {
+            let period = text.len() + GAP;
+            loop {
+                for offset in 0..period {
+                    let mut encodings = [BLANK; 6];
+                    for (i, enc) in encodings.iter_mut().enumerate() {
+                        let pos = (offset + i) % period;
+                        if pos < text.len() {
+                            *enc = char_encoding(text[pos]);
+                        }
+                    }
+                    self.write_frame(&encodings);
+
+                    match select(Timer::after_millis(speed_ms), signal.wait()).await {
+                        Either::First(()) => {}
+                        Either::Second(new_cmd) => return Some(new_cmd),
+                    }
+                }
+            }
+        } else {
+            let mut padded = [b' '; LCD_TEXT_MAX + PAD * 2];
+            let len = text.len().min(LCD_TEXT_MAX);
+            padded[PAD..PAD + len].copy_from_slice(&text[..len]);
+            let total = PAD + len + PAD;
+
+            for offset in 0..total.saturating_sub(5) {
+                let mut encodings = [BLANK; 6];
+                for (i, enc) in encodings.iter_mut().enumerate() {
+                    let pos = offset + i;
+                    if pos < total {
+                        *enc = char_encoding(padded[pos]);
+                    }
+                }
+                self.write_frame(&encodings);
+
+                match select(Timer::after_millis(speed_ms), signal.wait()).await {
+                    Either::First(()) => {}
+                    Either::Second(new_cmd) => return Some(new_cmd),
+                }
+            }
+            None
+        }
     }
 }
