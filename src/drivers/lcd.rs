@@ -69,7 +69,7 @@ const DIGIT_GLASS_SEGS: [[u8; 4]; 6] = [
 // COM1 nibble bits: 0=D, 1=C, 2=A, 3=F
 // COM2 nibble bits: 0=P, 1=COL, 2=K, 3=Q
 // COM3 nibble bits: 0=N, 1=DP,  2=J, 3=H
-const NUMBER_MAP: [u16; 11] = [
+const DIGIT_MAP: [u16; 10] = [
     0x5F00, // 0
     0x4200, // 1
     0xF500, // 2
@@ -80,8 +80,56 @@ const NUMBER_MAP: [u16; 11] = [
     0x4600, // 7
     0xFF00, // 8
     0xEF00, // 9
-    0x0000, // blank
 ];
+
+const LETTER_MAP: [u16; 26] = [
+    0xFE00, // A
+    0x6714, // B
+    0x1D00, // C
+    0x4714, // D
+    0x9D00, // E
+    0x9C00, // F
+    0x3F00, // G
+    0xFA00, // H
+    0x0014, // I
+    0x5300, // J
+    0x9841, // K
+    0x1900, // L
+    0x5A48, // M
+    0x5A09, // N
+    0x5F00, // O
+    0xFC00, // P
+    0x5F01, // Q
+    0xFC01, // R
+    0xAF00, // S
+    0x0414, // T
+    0x5B00, // U
+    0x18C0, // V
+    0x5A81, // W
+    0x00C9, // X
+    0x0058, // Y
+    0x05C0, // Z
+];
+
+const BLANK: u16 = 0x0000;
+
+fn char_encoding(ch: u8) -> u16 {
+    match ch {
+        b'0'..=b'9' => DIGIT_MAP[(ch - b'0') as usize],
+        b'A'..=b'Z' => LETTER_MAP[(ch - b'A') as usize],
+        b'a'..=b'z' => LETTER_MAP[(ch - b'a') as usize],
+        b' ' => BLANK,
+        b'-' => 0xA000,
+        b'+' => 0xA014,
+        b'*' => 0xA0DD,
+        b'/' => 0x00C0,
+        b'(' => 0x0028,
+        b')' => 0x0011,
+        b'%' => 0xB300,
+        b'_' => 0x0100,
+        _ => BLANK,
+    }
+}
 
 /// Pin set for the STM32U083C-DK on-board 4x24 segment LCD (DIP28 connector).
 /// Pin order follows UM3292 Table 12.
@@ -219,44 +267,11 @@ impl SegLcd {
         Self { lcd }
     }
 
-    /// Display a decimal number right-justified across all 6 digit positions.
-    /// Values above 999999 are clamped. Leading positions are blank.
-    pub fn display_number(&mut self, value: u32) {
-        let value = value.min(999999);
-
-        let digits: [usize; 6] = [
-            if value >= 100000 {
-                (value / 100000 % 10) as usize
-            } else {
-                10
-            },
-            if value >= 10000 {
-                (value / 10000 % 10) as usize
-            } else {
-                10
-            },
-            if value >= 1000 {
-                (value / 1000 % 10) as usize
-            } else {
-                10
-            },
-            if value >= 100 {
-                (value / 100 % 10) as usize
-            } else {
-                10
-            },
-            if value >= 10 {
-                (value / 10 % 10) as usize
-            } else {
-                10
-            },
-            (value % 10) as usize,
-        ];
-
+    /// Write 6 character encodings to the LCD hardware and submit the frame.
+    fn write_frame(&mut self, encodings: &[u16; 6]) {
         let mut com_segs = [0u64; 4];
 
-        for (digit_idx, &digit_val) in digits.iter().enumerate() {
-            let encoding = NUMBER_MAP[digit_val];
+        for (digit_idx, &encoding) in encodings.iter().enumerate() {
             let glass_segs = &DIGIT_GLASS_SEGS[digit_idx];
 
             for com in 0..4u8 {
@@ -275,6 +290,35 @@ impl SegLcd {
             self.lcd.write_com_segments(com as u8, mask);
         }
         self.lcd.submit_frame();
+    }
+
+    /// Display a decimal number right-justified across all 6 digit positions.
+    /// Values above 999999 are clamped. Leading positions are blank.
+    pub fn display_number(&mut self, value: u32) {
+        let value = value.min(999999);
+        let divs = [100000, 10000, 1000, 100, 10, 1];
+        let mut encodings = [BLANK; 6];
+
+        for (i, &d) in divs.iter().enumerate() {
+            if value >= d || d == 1 {
+                encodings[i] = DIGIT_MAP[((value / d) % 10) as usize];
+            }
+        }
+
+        self.write_frame(&encodings);
+    }
+
+    /// Display a string left-justified across the 6 digit positions.
+    /// Only the first 6 characters are shown; remaining positions are blank.
+    /// Supports A-Z, a-z, 0-9, space, and common punctuation (-+*/%()).
+    pub fn display_str(&mut self, s: &str) {
+        let mut encodings = [BLANK; 6];
+
+        for (i, &byte) in s.as_bytes().iter().take(6).enumerate() {
+            encodings[i] = char_encoding(byte);
+        }
+
+        self.write_frame(&encodings);
     }
 
     /// Clear the entire LCD.
