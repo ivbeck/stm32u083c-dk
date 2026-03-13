@@ -9,9 +9,8 @@ fn main() {
         .expect("failed to create memory.x")
         .write_all(include_bytes!("memory.x"))
         .expect("failed to write memory.x");
+    
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed=memory.x");
-
-    // THIS IS THE LINE YOU ARE MISSING
     println!("cargo:rerun-if-changed=defmt.x");
 }
