@@ -2,10 +2,10 @@
 #![no_std]
 
 use stm32u083c_dk as _;
-use stm32u083c_dk::communication::LCD_CMD;
+use stm32u083c_dk::communication::lcd_send;
 use stm32u083c_dk::drivers::dedicated_rgb_leds::Rgb;
 use stm32u083c_dk::drivers::joystick::Joystick;
-use stm32u083c_dk::drivers::lcd::{LcdCommand, SegLcd};
+use stm32u083c_dk::drivers::lcd::{LcdMessage, SegLcd};
 use stm32u083c_dk::drivers::temp_sensor::Stts22h;
 use stm32u083c_dk::tasks::{blink_task, joystick_task, lcd_task, temp_sensor_task};
 
@@ -45,7 +45,7 @@ async fn main(spawner: Spawner) {
         }
     }
 
-    LCD_CMD.signal(LcdCommand::scroll_loop("Hi!", 200));
+    lcd_send(LcdMessage::text("Hi!", 200));
 
     loop {
         Timer::after_millis(1000).await;

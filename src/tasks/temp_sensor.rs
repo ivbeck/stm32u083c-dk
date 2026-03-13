@@ -4,8 +4,8 @@ use defmt::{info, warn};
 use embassy_time::Timer;
 
 use crate::{
-    communication::LCD_CMD,
-    drivers::{lcd::LcdCommand, temp_sensor::Stts22h},
+    communication::lcd_send,
+    drivers::{lcd::LcdMessage, temp_sensor::Stts22h},
     format_str,
 };
 
@@ -19,7 +19,7 @@ pub async fn temp_sensor_task(mut sensor: Stts22h) {
                 if f32_abs_diff(temp, last_temp) > 0.5 {
                     last_temp = temp;
                     info!("Board temperature: {}°C", temp);
-                    LCD_CMD.signal(LcdCommand::scroll(
+                    lcd_send(LcdMessage::text(
                         format_str!("Temp: {}C", temp).as_str(),
                         200,
                     ));

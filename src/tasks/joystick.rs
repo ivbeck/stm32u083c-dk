@@ -5,10 +5,10 @@ use embassy_stm32::{adc::AnyAdcChannel, peripherals::ADC1};
 use embassy_time::Timer;
 
 use crate::{
-    communication::{DELAY_MS, LCD_CMD},
+    communication::{DELAY_MS, lcd_send},
     drivers::{
         joystick::{JoyDirection, Joystick},
-        lcd::LcdCommand,
+        lcd::LcdMessage,
     },
     format_str,
 };
@@ -29,7 +29,7 @@ pub async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>)
                     let new_v = v.saturating_sub(DELAY_STEP_MS);
                     DELAY_MS.store(new_v, Ordering::Relaxed);
                     info!("Speed up: {}ms", new_v);
-                    LCD_CMD.signal(LcdCommand::scroll(
+                    lcd_send(LcdMessage::text(
                         format_str!("UP to {}ms", new_v).as_str(),
                         200,
                     ));
@@ -39,16 +39,16 @@ pub async fn joystick_task(mut joystick: Joystick<AnyAdcChannel<'static, ADC1>>)
                     let new_v = v.saturating_add(DELAY_STEP_MS).min(DELAY_MAX_MS);
                     DELAY_MS.store(new_v, Ordering::Relaxed);
                     info!("DOWN: {}ms", new_v);
-                    LCD_CMD.signal(LcdCommand::scroll(
+                    lcd_send(LcdMessage::text(
                         format_str!("DOWN to {}ms", new_v).as_str(),
                         200,
                     ));
                 }
                 JoyDirection::Right => {
-                    LCD_CMD.signal(LcdCommand::scroll_loop("Wassup Dawg", 200));
+                    lcd_send(LcdMessage::text("Wassup Dawg", 200));
                 }
                 JoyDirection::Left => {
-                    LCD_CMD.signal(LcdCommand::Clear);
+                    lcd_send(LcdMessage::Clear);
                 }
                 _ => {}
             }
