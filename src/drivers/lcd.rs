@@ -8,27 +8,16 @@ use embassy_stm32::{
     },
 };
 use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
-use embassy_sync::signal::Signal;
+use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 
-pub type LcdSignal = Signal<CriticalSectionRawMutex, LcdCommand>;
+pub type LcdChannel = Channel<CriticalSectionRawMutex, LcdMessage, 4>;
 
 const LCD_TEXT_MAX: usize = 32;
 
-#[allow(unused)]
 #[derive(Clone)]
-pub enum LcdCommand {
-    Number(u32),
+pub enum LcdMessage {
     Text {
-        buf: [u8; 6],
-        len: u8,
-    },
-    Scroll {
-        buf: [u8; LCD_TEXT_MAX],
-        len: u8,
-        speed_ms: u16,
-    },
-    ScrollLoop {
         buf: [u8; LCD_TEXT_MAX],
         len: u8,
         speed_ms: u16,
@@ -36,44 +25,13 @@ pub enum LcdCommand {
     Clear,
 }
 
-impl LcdCommand {
+impl LcdMessage {
     #[must_use]
-    pub const fn number(n: u32) -> Self {
-        Self::Number(n)
-    }
-
-    #[must_use]
-    #[allow(unused)]
-    pub fn text(s: &str) -> Self {
-        let mut buf = [b' '; 6];
-        let len = s.len().min(6);
+    pub fn text(s: &str, speed_ms: u16) -> Self {
+        let mut buf = [b' '; LCD_TEXT_MAX];
+        let len = s.len().min(LCD_TEXT_MAX);
         buf[..len].copy_from_slice(&s.as_bytes()[..len]);
         Self::Text {
-            buf,
-            #[allow(clippy::cast_possible_truncation)]
-            len: len as u8,
-        }
-    }
-
-    #[must_use]
-    pub fn scroll(s: &str, speed_ms: u16) -> Self {
-        let mut buf = [b' '; LCD_TEXT_MAX];
-        let len = s.len().min(LCD_TEXT_MAX);
-        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-        Self::Scroll {
-            buf,
-            #[allow(clippy::cast_possible_truncation)]
-            len: len as u8,
-            speed_ms,
-        }
-    }
-
-    #[must_use]
-    pub fn scroll_loop(s: &str, speed_ms: u16) -> Self {
-        let mut buf = [b' '; LCD_TEXT_MAX];
-        let len = s.len().min(LCD_TEXT_MAX);
-        buf[..len].copy_from_slice(&s.as_bytes()[..len]);
-        Self::ScrollLoop {
             buf,
             #[allow(clippy::cast_possible_truncation)]
             len: len as u8,
@@ -201,6 +159,7 @@ const fn char_encoding(ch: u8) -> u16 {
         b')' => 0x0011,
         b'%' => 0xB300,
         b'_' => 0x0100,
+        b',' | b'.' => 1 << 12,
         _ => BLANK,
     }
 }
@@ -295,6 +254,7 @@ impl SegLcd {
 
 pub struct SegLcd {
     lcd: lcd::Lcd<'static, LCD>,
+    last_frame: [u16; 6],
 }
 
 impl SegLcd {
@@ -340,11 +300,15 @@ impl SegLcd {
             ],
         );
 
-        Self { lcd }
+        Self {
+            lcd,
+            last_frame: [BLANK; 6],
+        }
     }
 
     /// Write 6 character encodings to the LCD hardware and submit the frame.
     fn write_frame(&mut self, encodings: &[u16; 6]) {
+        self.last_frame = *encodings;
         let mut com_segs = [0u64; 4];
 
         for (digit_idx, &encoding) in encodings.iter().enumerate() {
@@ -400,6 +364,7 @@ impl SegLcd {
 
     /// Clear the entire LCD.
     pub fn clear(&mut self) {
+        self.last_frame = [BLANK; 6];
         for c in 0..4u8 {
             self.lcd.write_com_segments(c, 0);
         }
@@ -419,96 +384,117 @@ impl SegLcd {
         self.lcd.submit_frame();
     }
 
-    /// Process LCD commands from a `Signal`, forever.
+    /// Process LCD messages from a queue, forever.
     ///
-    /// Immediate commands (`Number`, `Text`, `Clear`) are applied instantly.
-    /// Animated commands (`Scroll`, `ScrollLoop`) run frame-by-frame and are
-    /// **automatically cancelled** when a new command arrives on the signal.
+    /// Always loops the latest text entry. When a new message arrives,
+    /// a dash-wipe transition plays before switching to the new text.
     ///
     /// Spawn this in a dedicated `#[embassy_executor::task]`.
-    pub async fn run(&mut self, signal: &'static LcdSignal) -> ! {
-        let mut pending: Option<LcdCommand> = None;
+    pub async fn run(&mut self, channel: &'static LcdChannel) -> ! {
+        let mut msg = channel.receive().await;
+        let mut first = true;
 
         loop {
-            let cmd = match pending.take() {
-                Some(cmd) => cmd,
-                None => signal.wait().await,
-            };
+            msg = Self::drain_channel(channel, msg);
 
-            match cmd {
-                LcdCommand::Number(n) => self.display_number(n),
-                LcdCommand::Text { buf, len } => {
-                    let s = core::str::from_utf8(&buf[..len as usize]).unwrap_or("");
-                    self.display_str(s);
+            match msg {
+                LcdMessage::Clear => {
+                    self.clear();
+                    msg = channel.receive().await;
+                    first = true;
                 }
-                LcdCommand::Clear => self.clear(),
-                LcdCommand::Scroll { buf, len, speed_ms } => {
-                    pending = self
-                        .run_scroll(signal, &buf[..len as usize], u64::from(speed_ms), false)
-                        .await;
-                }
-                LcdCommand::ScrollLoop { buf, len, speed_ms } => {
-                    pending = self
-                        .run_scroll(signal, &buf[..len as usize], u64::from(speed_ms), true)
-                        .await;
+                LcdMessage::Text { buf, len, speed_ms } => {
+                    let text = &buf[..len as usize];
+
+                    if !first {
+                        self.play_transition(text).await;
+                        if let Ok(newer) = channel.try_receive() {
+                            msg = Self::drain_channel(channel, newer);
+                            continue;
+                        }
+                    }
+                    first = false;
+
+                    msg = self.scroll_loop(channel, text, u64::from(speed_ms)).await;
                 }
             }
         }
     }
 
-    /// Run a scroll animation, returning `Some(cmd)` if cancelled by a new
-    /// command, or `None` when a one-shot scroll finishes naturally.
-    async fn run_scroll(
+    /// Drain all pending messages from the channel, returning the latest.
+    fn drain_channel(channel: &LcdChannel, initial: LcdMessage) -> LcdMessage {
+        let mut latest = initial;
+        while let Ok(msg) = channel.try_receive() {
+            latest = msg;
+        }
+        latest
+    }
+
+    /// Scroll text in an infinite loop, returning when a new message arrives.
+    ///
+    /// Short text (<=6 chars) is displayed statically until interrupted.
+    async fn scroll_loop(
         &mut self,
-        signal: &LcdSignal,
+        channel: &LcdChannel,
         text: &[u8],
         speed_ms: u64,
-        looping: bool,
-    ) -> Option<LcdCommand> {
-        const PAD: usize = 6;
+    ) -> LcdMessage {
         const GAP: usize = 3;
 
-        if looping {
-            let period = text.len() + GAP;
-            loop {
-                for offset in 0..period {
-                    let mut encodings = [BLANK; 6];
-                    for (i, enc) in encodings.iter_mut().enumerate() {
-                        let pos = (offset + i) % period;
-                        if pos < text.len() {
-                            *enc = char_encoding(text[pos]);
-                        }
-                    }
-                    self.write_frame(&encodings);
-
-                    match select(Timer::after_millis(speed_ms), signal.wait()).await {
-                        Either::First(()) => {}
-                        Either::Second(new_cmd) => return Some(new_cmd),
-                    }
-                }
+        if text.len() <= 6 {
+            let mut encodings = [BLANK; 6];
+            for (i, &byte) in text.iter().enumerate() {
+                encodings[i] = char_encoding(byte);
             }
-        } else {
-            let mut padded = [b' '; LCD_TEXT_MAX + PAD * 2];
-            let len = text.len().min(LCD_TEXT_MAX);
-            padded[PAD..PAD + len].copy_from_slice(&text[..len]);
-            let total = PAD + len + PAD;
+            self.write_frame(&encodings);
+            return channel.receive().await;
+        }
 
-            for offset in 0..total.saturating_sub(5) {
+        let period = text.len() + GAP;
+        loop {
+            for offset in 0..period {
                 let mut encodings = [BLANK; 6];
                 for (i, enc) in encodings.iter_mut().enumerate() {
-                    let pos = offset + i;
-                    if pos < total {
-                        *enc = char_encoding(padded[pos]);
+                    let pos = (offset + i) % period;
+                    if pos < text.len() {
+                        *enc = char_encoding(text[pos]);
                     }
                 }
                 self.write_frame(&encodings);
 
-                match select(Timer::after_millis(speed_ms), signal.wait()).await {
+                match select(Timer::after_millis(speed_ms), channel.receive()).await {
                     Either::First(()) => {}
-                    Either::Second(new_cmd) => return Some(new_cmd),
+                    Either::Second(new_msg) => return new_msg,
                 }
             }
-            None
+        }
+    }
+
+    /// Dash-wipe transition: dashes sweep left-to-right over the current
+    /// content, then the new text is revealed left-to-right.
+    async fn play_transition(&mut self, new_text: &[u8]) {
+        const STEP_MS: u64 = 40;
+        let dash = char_encoding(b'-');
+
+        let mut new_frame = [BLANK; 6];
+        for (i, enc) in new_frame.iter_mut().enumerate() {
+            if i < new_text.len() {
+                *enc = char_encoding(new_text[i]);
+            }
+        }
+
+        let mut frame = self.last_frame;
+
+        for i in 0..6 {
+            frame[i] = dash;
+            self.write_frame(&frame);
+            Timer::after_millis(STEP_MS).await;
+        }
+
+        for i in 0..6 {
+            frame[i] = new_frame[i];
+            self.write_frame(&frame);
+            Timer::after_millis(STEP_MS).await;
         }
     }
 }
