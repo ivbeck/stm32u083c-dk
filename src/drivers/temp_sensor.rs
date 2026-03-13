@@ -15,6 +15,7 @@ const REG_TEMP_L_OUT: u8 = 0x06;
 const REG_SOFTWARE_RESET: u8 = 0x0C;
 
 const WHOAMI_VALUE: u8 = 0xA0;
+const CTRL_IF_ADD_INC: u8 = 0x08;
 const CTRL_ONE_SHOT: u8 = 0x01;
 const STATUS_BUSY: u8 = 0x01;
 
@@ -75,7 +76,7 @@ impl Stts22h {
     pub fn read_temperature(&mut self) -> Result<f32, Stts22hError> {
         self.write_reg(REG_SOFTWARE_RESET, 0x02)?;
         self.write_reg(REG_SOFTWARE_RESET, 0x00)?;
-        self.write_reg(REG_CTRL, CTRL_ONE_SHOT)?;
+        self.write_reg(REG_CTRL, CTRL_IF_ADD_INC | CTRL_ONE_SHOT)?;
 
         let mut retries = 200u16;
         loop {
