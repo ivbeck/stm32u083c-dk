@@ -1,6 +1,3 @@
-use core::fmt::Display;
-
-use defmt::{dbg, debug};
 use embassy_stm32::{
     Peri,
     adc::{Adc, AdcChannel, SampleTime},
@@ -26,7 +23,7 @@ const RIGHT_THRESHOLD_MAX: u16 = 3400;
 const NEUTRAL_THRESHOLD_MIN: u16 = 3800;
 const NEUTRAL_THRESHOLD_MAX: u16 = 4200;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum JoyDirection {
     Up,
     Down,
@@ -39,14 +36,15 @@ pub enum JoyDirection {
 
 impl defmt::Format for JoyDirection {
     fn format(&self, fmt: defmt::Formatter) {
+        #[allow(clippy::match_same_arms)]
         match self {
-            JoyDirection::Up => defmt::write!(fmt, "Up"),
-            JoyDirection::Down => defmt::write!(fmt, "Down"),
-            JoyDirection::Left => defmt::write!(fmt, "Left"),
-            JoyDirection::Right => defmt::write!(fmt, "Right"),
-            JoyDirection::Center => defmt::write!(fmt, "Center"),
-            JoyDirection::Neutral => defmt::write!(fmt, "Neutral"),
-            JoyDirection::Invalid => defmt::write!(fmt, "Invalid"),
+            Self::Up => defmt::write!(fmt, "Up"),
+            Self::Down => defmt::write!(fmt, "Down"),
+            Self::Left => defmt::write!(fmt, "Left"),
+            Self::Right => defmt::write!(fmt, "Right"),
+            Self::Center => defmt::write!(fmt, "Center"),
+            Self::Neutral => defmt::write!(fmt, "Neutral"),
+            Self::Invalid => defmt::write!(fmt, "Invalid"),
         }
     }
 }

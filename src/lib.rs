@@ -6,3 +6,6 @@ use panic_probe as _;
 
 mod drivers;
 pub use drivers::*;
+
+mod macros;
+pub use macros::*;
