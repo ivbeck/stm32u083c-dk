@@ -6,7 +6,7 @@ use stm32u083c_dk as _; // memory layout + panic handler
 mod drivers;
 mod macros;
 
-use defmt::*;
+use defmt::info;
 
 use core::sync::atomic::{AtomicU32, Ordering};
 
@@ -30,7 +30,7 @@ static LCD_CMD: Signal<CriticalSectionRawMutex, LcdCommand> = Signal::new();
 
 #[embassy_executor::task]
 async fn lcd_task(mut lcd: SegLcd) {
-    lcd.run(&LCD_CMD).await
+    lcd.run(&LCD_CMD).await;
 }
 
 #[embassy_executor::task]
@@ -89,9 +89,11 @@ async fn main(spawner: Spawner) {
 
     let joystick = Joystick::new(p.ADC1, p.PC2.degrade_adc());
 
-    spawner.spawn(lcd_task(seg_lcd)).unwrap();
-    spawner.spawn(joystick_task(joystick)).unwrap();
-    spawner.spawn(blink_task(rgb)).unwrap();
+    spawner.spawn(lcd_task(seg_lcd)).expect("lcd_task");
+    spawner
+        .spawn(joystick_task(joystick))
+        .expect("joystick_task");
+    spawner.spawn(blink_task(rgb)).expect("blink_task");
 
     LCD_CMD.signal(LcdCommand::number(DELAY_MS.load(Ordering::Relaxed)));
 
@@ -106,6 +108,6 @@ async fn blink_task(mut rgb: Rgb) {
 
     loop {
         let delay_ms = DELAY_MS.load(Ordering::Relaxed);
-        rgb.blink_cascade(delay_ms as u64).await;
+        rgb.blink_cascade(u64::from(delay_ms)).await;
     }
 }

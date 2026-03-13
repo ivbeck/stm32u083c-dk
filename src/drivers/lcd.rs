@@ -37,10 +37,12 @@ pub enum LcdCommand {
 }
 
 impl LcdCommand {
-    pub fn number(n: u32) -> Self {
+    #[must_use]
+    pub const fn number(n: u32) -> Self {
         Self::Number(n)
     }
 
+    #[must_use]
     #[allow(unused)]
     pub fn text(s: &str) -> Self {
         let mut buf = [b' '; 6];
@@ -48,27 +50,32 @@ impl LcdCommand {
         buf[..len].copy_from_slice(&s.as_bytes()[..len]);
         Self::Text {
             buf,
+            #[allow(clippy::cast_possible_truncation)]
             len: len as u8,
         }
     }
 
+    #[must_use]
     pub fn scroll(s: &str, speed_ms: u16) -> Self {
         let mut buf = [b' '; LCD_TEXT_MAX];
         let len = s.len().min(LCD_TEXT_MAX);
         buf[..len].copy_from_slice(&s.as_bytes()[..len]);
         Self::Scroll {
             buf,
+            #[allow(clippy::cast_possible_truncation)]
             len: len as u8,
             speed_ms,
         }
     }
 
+    #[must_use]
     pub fn scroll_loop(s: &str, speed_ms: u16) -> Self {
         let mut buf = [b' '; LCD_TEXT_MAX];
         let len = s.len().min(LCD_TEXT_MAX);
         buf[..len].copy_from_slice(&s.as_bytes()[..len]);
         Self::ScrollLoop {
             buf,
+            #[allow(clippy::cast_possible_truncation)]
             len: len as u8,
             speed_ms,
         }
@@ -181,12 +188,11 @@ const LETTER_MAP: [u16; 26] = [
 
 const BLANK: u16 = 0x0000;
 
-fn char_encoding(ch: u8) -> u16 {
+const fn char_encoding(ch: u8) -> u16 {
     match ch {
         b'0'..=b'9' => DIGIT_MAP[(ch - b'0') as usize],
         b'A'..=b'Z' => LETTER_MAP[(ch - b'A') as usize],
         b'a'..=b'z' => LETTER_MAP[(ch - b'a') as usize],
-        b' ' => BLANK,
         b'-' => 0xA000,
         b'+' => 0xA014,
         b'*' => 0xA0DD,
@@ -248,6 +254,7 @@ impl SegLcd {
     /// The caller must ensure these peripherals are not used elsewhere.
     /// In practice, call this once early in `main` before handing out any
     /// of the LCD-related pins.
+    #[must_use]
     pub unsafe fn from_peripherals() -> Self {
         unsafe {
             Self::new(SegLcdPins {
@@ -291,6 +298,7 @@ pub struct SegLcd {
 }
 
 impl SegLcd {
+    #[must_use]
     pub fn new(pins: SegLcdPins) -> Self {
         let mut config = Config::default();
         config.duty = Duty::Quarter;
@@ -343,7 +351,7 @@ impl SegLcd {
             let glass_segs = &DIGIT_GLASS_SEGS[digit_idx];
 
             for com in 0..4u8 {
-                let nibble = (encoding >> (12 - com as u16 * 4)) & 0xf;
+                let nibble = (encoding >> (12 - u16::from(com) * 4)) & 0xf;
                 for bit in 0..4u8 {
                     if (nibble & (1 << bit)) != 0 {
                         let glass_idx = glass_segs[bit as usize];
@@ -355,6 +363,7 @@ impl SegLcd {
         }
 
         for (com, &mask) in com_segs.iter().enumerate() {
+            #[allow(clippy::cast_possible_truncation)]
             self.lcd.write_com_segments(com as u8, mask);
         }
         self.lcd.submit_frame();
@@ -363,8 +372,8 @@ impl SegLcd {
     /// Display a decimal number right-justified across all 6 digit positions.
     /// Values above 999999 are clamped. Leading positions are blank.
     pub fn display_number(&mut self, value: u32) {
-        let value = value.min(999999);
-        let divs = [100000, 10000, 1000, 100, 10, 1];
+        let value = value.min(999_999);
+        let divs = [100_000, 10000, 1000, 100, 10, 1];
         let mut encodings = [BLANK; 6];
 
         for (i, &d) in divs.iter().enumerate() {
@@ -435,12 +444,12 @@ impl SegLcd {
                 LcdCommand::Clear => self.clear(),
                 LcdCommand::Scroll { buf, len, speed_ms } => {
                     pending = self
-                        .run_scroll(signal, &buf[..len as usize], speed_ms as u64, false)
+                        .run_scroll(signal, &buf[..len as usize], u64::from(speed_ms), false)
                         .await;
                 }
                 LcdCommand::ScrollLoop { buf, len, speed_ms } => {
                     pending = self
-                        .run_scroll(signal, &buf[..len as usize], speed_ms as u64, true)
+                        .run_scroll(signal, &buf[..len as usize], u64::from(speed_ms), true)
                         .await;
                 }
             }

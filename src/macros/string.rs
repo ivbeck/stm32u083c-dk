@@ -12,10 +12,12 @@ impl<const N: usize> Default for StackString<N> {
 }
 
 impl<const N: usize> StackString<N> {
+    #[must_use]
     pub const fn new() -> Self {
         Self { buf: [0; N], len: 0 }
     }
 
+    #[must_use]
     pub fn as_str(&self) -> &str {
         unsafe { core::str::from_utf8_unchecked(&self.buf[..self.len]) }
     }
