@@ -244,6 +244,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "demo-firmware"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "cortex-m-rt",
+ "defmt 1.0.1",
+ "defmt-rtt",
+ "embassy-executor",
+ "embassy-stm32",
+ "embassy-time",
+ "lib-stm32u083c-dk",
+ "panic-probe",
+]
+
+[[package]]
 name = "document-features"
 version = "0.2.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -666,6 +681,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
+name = "lib-stm32u083c-dk"
+version = "0.1.0"
+dependencies = [
+ "cortex-m",
+ "defmt 1.0.1",
+ "defmt-test",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-stm32",
+ "embassy-sync",
+ "embassy-time",
+ "fchashmap",
+ "hash32 1.0.0",
+ "hash32-derive",
+]
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -823,26 +855,6 @@ dependencies = [
  "cortex-m",
  "cortex-m-rt",
  "defmt 0.3.100",
-]
-
-[[package]]
-name = "stm32u083c-dk"
-version = "0.1.0"
-dependencies = [
- "cortex-m",
- "cortex-m-rt",
- "defmt 1.0.1",
- "defmt-rtt",
- "defmt-test",
- "embassy-executor",
- "embassy-futures",
- "embassy-stm32",
- "embassy-sync",
- "embassy-time",
- "fchashmap",
- "hash32 1.0.0",
- "hash32-derive",
- "panic-probe",
 ]
 
 [[package]]

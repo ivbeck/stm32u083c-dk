@@ -1,0 +1,47 @@
+[package]
+name = "demo-firmware"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+lib-stm32u083c-dk = { path = "../../lib/lib-stm32u083c-dk" }
+defmt = "1.0.1"
+defmt-rtt = "1.0.0"
+cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
+cortex-m-rt = "0.7.0"
+panic-probe = { version = "1.0.0", features = ["print-defmt"] }
+embassy-executor = { version = "0.9.1", features = [
+  "defmt",
+  "arch-cortex-m",
+  "executor-thread",
+] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+embassy-stm32 = { version = "0.5.0", features = [
+  "defmt",
+  "stm32u083mc",
+  "time-driver-any",
+] }
+
+[package.metadata.embassy]
+build = [{ target = "thumbv7em-none-eabi" }]
+
+[[bin]]
+name = "demo"
+path = "src/main.rs"
+test = false
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+future_not_send = "allow"
+unwrap_used = "deny"
+missing_const_for_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+enum_glob_use = "deny"
+match-wild-err-arm = "warn"

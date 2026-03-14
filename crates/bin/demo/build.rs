@@ -6,10 +6,12 @@ use std::path::PathBuf;
 fn main() {
     let out = &PathBuf::from(env::var_os("OUT_DIR").expect("OUT_DIR not set"));
     File::create(out.join("memory.x"))
-        .expect("failed to create memory.x")
+        .expect("create memory.x")
         .write_all(include_bytes!("memory.x"))
-        .expect("failed to write memory.x");
+        .expect("write memory.x");
     println!("cargo:rustc-link-search={}", out.display());
     println!("cargo:rerun-if-changed=memory.x");
-    println!("cargo:rerun-if-changed=defmt.x");
+    if std::path::Path::new("defmt.x").exists() {
+        println!("cargo:rerun-if-changed=defmt.x");
+    }
 }

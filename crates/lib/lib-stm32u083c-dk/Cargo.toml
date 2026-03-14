@@ -1,0 +1,55 @@
+[package]
+name = "lib-stm32u083c-dk"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+defmt = "1.0.1"
+cortex-m = { version = "0.7.6", features = ["critical-section-single-core"] }
+embassy-executor = { version = "0.9.1", features = [
+  "defmt",
+  "arch-cortex-m",
+  "executor-thread",
+] }
+embassy-time = { version = "0.5.0", features = ["defmt"] }
+embassy-stm32 = { version = "0.5.0", features = [
+  "defmt",
+  "stm32u083mc",
+  "time-driver-any",
+] }
+fchashmap = "0.1.3"
+hash32 = "1.0.0"
+hash32-derive = "0.1.1"
+embassy-sync = { version = "0.7.2", features = ["defmt"] }
+embassy-futures = { version = "0.1.2", features = ["defmt"] }
+
+[package.metadata.embassy]
+build = [{ target = "thumbv7em-none-eabi" }]
+
+[lib]
+harness = false
+test = false
+doctest = false
+
+[dev-dependencies]
+defmt-test = "0.4"
+
+[[test]]
+name = "add"
+harness = false
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+correctness = { level = "deny", priority = -1 }
+suspicious = { level = "deny", priority = -1 }
+complexity = { level = "deny", priority = -1 }
+style = { level = "deny", priority = -1 }
+nursery = { level = "deny", priority = -1 }
+future_not_send = "allow"
+unwrap_used = "deny"
+missing_const_for_fn = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+enum_glob_use = "deny"
+match-wild-err-arm = "warn"

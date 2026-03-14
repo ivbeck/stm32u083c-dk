@@ -2,12 +2,12 @@
 #![no_std]
 
 use defmt_rtt as _;
+use lib_stm32u083c_dk::drivers::dedicated_rgb_leds::Rgb;
+use lib_stm32u083c_dk::drivers::joystick::Joystick;
+use lib_stm32u083c_dk::drivers::lcd::SegLcd;
+use lib_stm32u083c_dk::drivers::temp_sensor::Stts22h;
+use lib_stm32u083c_dk::tasks::{blink_task, joystick_task, lcd_task, temp_sensor_task};
 use panic_probe as _;
-use stm32u083c_dk::drivers::dedicated_rgb_leds::Rgb;
-use stm32u083c_dk::drivers::joystick::Joystick;
-use stm32u083c_dk::drivers::lcd::SegLcd;
-use stm32u083c_dk::drivers::temp_sensor::Stts22h;
-use stm32u083c_dk::tasks::{blink_task, joystick_task, lcd_task, temp_sensor_task};
 
 use embassy_executor::Spawner;
 use embassy_stm32::adc::AdcChannel;
