@@ -146,8 +146,11 @@ const LETTER_MAP: [u16; 26] = [
 
 const BLANK: u16 = 0x0000;
 
-const fn char_encoding(ch: u8) -> u16 {
-    match ch {
+/// DP (decimal point) is COM3 bit 1 in the 16-bit encoding.
+const DP_BIT: u16 = 1 << 1;
+
+const fn char_encoding(ch: u8, dp: bool) -> u16 {
+    let mut out_hex = match ch {
         b'0'..=b'9' => DIGIT_MAP[(ch - b'0') as usize],
         b'A'..=b'Z' => LETTER_MAP[(ch - b'A') as usize],
         b'a'..=b'z' => LETTER_MAP[(ch - b'a') as usize],
@@ -159,9 +162,14 @@ const fn char_encoding(ch: u8) -> u16 {
         b')' => 0x0011,
         b'%' => 0xB300,
         b'_' => 0x0100,
-        b',' | b'.' => 1 << 12,
         _ => BLANK,
+    };
+
+    if dp {
+        out_hex |= 1 << 1; // DP (COM3 bit 1)
     }
+
+    out_hex
 }
 
 /// Pin set for the STM32U083C-DK on-board 4x24 segment LCD (DIP28 connector).
@@ -351,12 +359,26 @@ impl SegLcd {
 
     /// Display a string left-justified across the 6 digit positions.
     /// Only the first 6 characters are shown; remaining positions are blank.
+    /// A '.' in the string is not shown as a character: it turns on the decimal
+    /// point of the digit immediately before it (and does not consume a position).
     /// Supports A-Z, a-z, 0-9, space, and common punctuation (-+*/%()).
     pub fn display_str(&mut self, s: &str) {
         let mut encodings = [BLANK; 6];
+        let mut pos = 0_usize;
+        let bytes = s.as_bytes();
 
-        for (i, &byte) in s.as_bytes().iter().take(6).enumerate() {
-            encodings[i] = char_encoding(byte);
+        let mut i = 0;
+        while i < bytes.len() && pos < 6 {
+            let b = bytes[i];
+            if b == b'.' {
+                if pos > 0 {
+                    encodings[pos - 1] |= DP_BIT;
+                }
+            } else {
+                encodings[pos] = char_encoding(b, false);
+                pos += 1;
+            }
+            i += 1;
         }
 
         self.write_frame(&encodings);
@@ -443,8 +465,19 @@ impl SegLcd {
 
         if text.len() <= 6 {
             let mut encodings = [BLANK; 6];
-            for (i, &byte) in text.iter().enumerate() {
-                encodings[i] = char_encoding(byte);
+            let mut pos = 0_usize;
+            let mut i = 0;
+            while i < text.len() && pos < 6 {
+                let b = text[i];
+                if b == b'.' {
+                    if pos > 0 {
+                        encodings[pos - 1] |= DP_BIT;
+                    }
+                } else {
+                    encodings[pos] = char_encoding(b, false);
+                    pos += 1;
+                }
+                i += 1;
             }
             self.write_frame(&encodings);
             return channel.receive().await;
@@ -454,11 +487,25 @@ impl SegLcd {
         loop {
             for offset in 0..period {
                 let mut encodings = [BLANK; 6];
-                for (i, enc) in encodings.iter_mut().enumerate() {
-                    let pos = (offset + i) % period;
+                let mut disp_pos = 0_usize;
+                let mut k = 0;
+                while disp_pos < 6 && k < period {
+                    let pos = (offset + k) % period;
                     if pos < text.len() {
-                        *enc = char_encoding(text[pos]);
+                        let b = text[pos];
+                        if b == b'.' {
+                            if disp_pos > 0 {
+                                encodings[disp_pos - 1] |= DP_BIT;
+                            }
+                        } else {
+                            encodings[disp_pos] = char_encoding(b, false);
+                            disp_pos += 1;
+                        }
+                    } else {
+                        // Gap: blank already, advance display position
+                        disp_pos += 1;
                     }
+                    k += 1;
                 }
                 self.write_frame(&encodings);
 
@@ -474,13 +521,22 @@ impl SegLcd {
     /// content, then the new text is revealed left-to-right.
     async fn play_transition(&mut self, new_text: &[u8]) {
         const STEP_MS: u64 = 40;
-        let dash = char_encoding(b'-');
+        let dash = char_encoding(b'-', false);
 
         let mut new_frame = [BLANK; 6];
-        for (i, enc) in new_frame.iter_mut().enumerate() {
-            if i < new_text.len() {
-                *enc = char_encoding(new_text[i]);
+        let mut pos = 0_usize;
+        let mut i = 0;
+        while i < new_text.len() && pos < 6 {
+            let b = new_text[i];
+            if b == b'.' {
+                if pos > 0 {
+                    new_frame[pos - 1] |= DP_BIT;
+                }
+            } else {
+                new_frame[pos] = char_encoding(b, false);
+                pos += 1;
             }
+            i += 1;
         }
 
         let mut frame = self.last_frame;
