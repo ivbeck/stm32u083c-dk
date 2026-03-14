@@ -10,6 +10,6 @@ pub async fn blink_task(mut rgb: Rgb) {
 
     loop {
         let delay_ms = DELAY_MS.load(Ordering::Relaxed);
-        rgb.blink_cascade(u64::from(delay_ms)).await;
+        rgb.animation_loop(u64::from(delay_ms)).await;
     }
 }

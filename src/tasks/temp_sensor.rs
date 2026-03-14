@@ -10,23 +10,31 @@ use crate::{
 };
 
 #[embassy_executor::task]
-pub async fn temp_sensor_task(mut sensor: Stts22h) {
+pub async fn temp_sensor_task(mut sensor: Stts22h, lcd_display: bool) {
     let mut last_temp = f32::NEG_INFINITY;
 
     loop {
         match sensor.read_temperature() {
             Ok(temp) => {
-                if f32_abs_diff(temp, last_temp) > 0.5 {
+                if f32_abs_diff(temp, last_temp) > 0.1 {
                     last_temp = temp;
                     info!("Board temperature: {}°C", temp);
+                    if lcd_display {
+                        lcd_send(LcdMessage::text(
+                            format_str!("Temp: {}C", temp).as_str(),
+                            200,
+                        ));
+                    }
+                }
+            }
+            Err(err) => {
+                warn!("STTS22H read failed: {}", err);
+                if lcd_display {
                     lcd_send(LcdMessage::text(
-                        format_str!("Temp: {}C", temp).as_str(),
+                        format_str!("Temp read failed: {}", err).as_str(),
                         200,
                     ));
                 }
-            }
-            Err(_) => {
-                warn!("STTS22H read failed");
             }
         }
 

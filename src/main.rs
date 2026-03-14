@@ -2,7 +2,7 @@
 #![no_std]
 
 use stm32u083c_dk as _;
-use stm32u083c_dk::communication::lcd_send;
+use stm32u083c_dk::communication::{LCD_QUEUE, lcd_send};
 use stm32u083c_dk::drivers::dedicated_rgb_leds::Rgb;
 use stm32u083c_dk::drivers::joystick::Joystick;
 use stm32u083c_dk::drivers::lcd::{LcdMessage, SegLcd};
@@ -28,15 +28,29 @@ async fn main(spawner: Spawner) {
     let seg_lcd = unsafe { SegLcd::from_peripherals() };
     let joystick = Joystick::new(p.ADC1, p.PC2.degrade_adc());
 
-    spawner.spawn(lcd_task(seg_lcd)).expect("lcd_task");
-    spawner
-        .spawn(joystick_task(joystick))
-        .expect("joystick_task");
     spawner.spawn(blink_task(rgb)).expect("blink_task");
+    spawner.spawn(lcd_task(seg_lcd)).expect("lcd_task");
 
-    match Stts22h::new(p.I2C1, p.PB8, p.PB7) {
-        Ok(sensor) => {
-            spawner
+    let sensor = match Stts22h::new(p.I2C1, p.PB8, p.PB7) {
+        Ok(sensor) => sensor,
+        Err(err) => {
+            defmt::error!("STTS22H init failed: {}", err);
+            return;
+        }
+    };
+
+    spawner
+        .spawn(temp_sensor_task(sensor, false))
+        .expect("temp_sensor_task");
+
+    /*
+        spawner
+            .spawn(joystick_task(joystick))
+            .expect("joystick_task");
+        spawner.spawn(blink_task(rgb)).expect("blink_task");
+        match Stts22h::new(p.I2C1, p.PB8, p.PB7) {
+            Ok(sensor) => {
+                spawner
                 .spawn(temp_sensor_task(sensor))
                 .expect("temp_sensor_task");
         }
@@ -46,6 +60,7 @@ async fn main(spawner: Spawner) {
     }
 
     lcd_send(LcdMessage::text("Hi!", 200));
+    */
 
     loop {
         Timer::after_millis(1000).await;

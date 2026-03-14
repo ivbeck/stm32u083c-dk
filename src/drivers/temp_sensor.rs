@@ -1,3 +1,5 @@
+use core::fmt::Display;
+
 use embassy_stm32::{
     Peri,
     i2c::{self, I2c, Master},
@@ -25,7 +27,7 @@ pub struct Stts22h {
 
 #[derive(Debug)]
 pub enum Stts22hError {
-    I2c,
+    I2c(i2c::Error),
     WhoAmI(u8),
     Timeout,
 }
@@ -34,9 +36,19 @@ impl defmt::Format for Stts22hError {
     #[allow(clippy::match_same_arms)]
     fn format(&self, fmt: defmt::Formatter) {
         match self {
-            Self::I2c => defmt::write!(fmt, "I2C communication failed"),
+            Self::I2c(err) => defmt::write!(fmt, "I2C communication failed: {}", err),
             Self::WhoAmI(id) => defmt::write!(fmt, "WhoAmI failed: {}", id),
             Self::Timeout => defmt::write!(fmt, "Timeout"),
+        }
+    }
+}
+
+impl Display for Stts22hError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::I2c(err) => write!(f, "I2C communication failed: {err}"),
+            Self::WhoAmI(id) => write!(f, "WhoAmI failed: {id}"),
+            Self::Timeout => write!(f, "Timeout"),
         }
     }
 }
@@ -90,7 +102,7 @@ impl Stts22h {
         let mut buf = [0u8; 2];
         self.i2c
             .blocking_write_read(ADDR, &[REG_TEMP_L_OUT], &mut buf)
-            .map_err(|_| Stts22hError::I2c)?;
+            .map_err(Stts22hError::I2c)?;
 
         let raw = i16::from_le_bytes(buf);
         Ok(f32::from(raw) / 100.0)
@@ -100,14 +112,14 @@ impl Stts22h {
         let mut buf = [0u8; 1];
         self.i2c
             .blocking_write_read(ADDR, &[reg], &mut buf)
-            .map_err(|_| Stts22hError::I2c)?;
+            .map_err(Stts22hError::I2c)?;
         Ok(buf[0])
     }
 
     fn write_reg(&mut self, reg: u8, val: u8) -> Result<(), Stts22hError> {
         self.i2c
             .blocking_write(ADDR, &[reg, val])
-            .map_err(|_| Stts22hError::I2c)?;
+            .map_err(Stts22hError::I2c)?;
         Ok(())
     }
 }
